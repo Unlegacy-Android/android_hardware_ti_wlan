@@ -99,7 +99,7 @@ void wl1271_ps_elp_sleep(struct wl1271 *wl)
 
 	timeout = wl->conf.conn.forced_ps ?
 			ELP_ENTRY_DELAY_FORCE_PS : ELP_ENTRY_DELAY;
-	ieee80211_queue_delayed_work(wl->hw, &wl->elp_work,
+	ieee80211_force_queue_delayed_work(wl->hw, &wl->elp_work,
 				     msecs_to_jiffies(timeout));
 }
 EXPORT_SYMBOL_GPL(wl1271_ps_elp_sleep);
