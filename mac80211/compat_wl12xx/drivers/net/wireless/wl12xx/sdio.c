@@ -132,8 +132,17 @@ static int __must_check wl12xx_sdio_raw_write(struct device *child, int addr,
 static int wl12xx_sdio_power_on(struct wl12xx_sdio_glue *glue)
 {
 	int ret;
+	struct wl12xx_platform_data *pdata = glue->core->dev.platform_data;
 	struct sdio_func *func = dev_to_sdio_func(glue->dev);
 	struct mmc_card *card = func->card;
+
+	/*
+	 * Power is controlled by runtime PM, but we still call board
+	 * callback in case it wants to do any additional setup,
+	 * for example enabling clock buffer for the module.
+	 */
+	if (pdata->set_power)
+		pdata->set_power(true);
 
 	ret = pm_runtime_get_sync(&card->dev);
 	if (ret) {
@@ -160,6 +169,7 @@ out:
 static int wl12xx_sdio_power_off(struct wl12xx_sdio_glue *glue)
 {
 	int ret;
+	struct wl12xx_platform_data *pdata = glue->core->dev.platform_data;
 	struct sdio_func *func = dev_to_sdio_func(glue->dev);
 	struct mmc_card *card = func->card;
 
@@ -174,6 +184,14 @@ static int wl12xx_sdio_power_off(struct wl12xx_sdio_glue *glue)
 
 	/* Let runtime PM know the card is powered off */
 	pm_runtime_put_sync(&card->dev);
+
+	/*
+	 * Power is controlled by runtime PM, but we still call board
+	 * callback in case it wants to do any additional setup,
+	 * for example enabling clock buffer for the module.
+	 */
+	if (pdata->set_power)
+		pdata->set_power(false);
 
 out:
 	return ret;
@@ -364,22 +382,12 @@ static struct sdio_driver wl1271_sdio_driver = {
 
 static int __init wl1271_init(void)
 {
-	const struct wl12xx_platform_data *wlan_data = wl12xx_get_platform_data();
-
-	if (wlan_data->set_power)
-		wlan_data->set_power(1);
-
 	return sdio_register_driver(&wl1271_sdio_driver);
 }
 
 static void __exit wl1271_exit(void)
 {
-	const struct wl12xx_platform_data *wlan_data = wl12xx_get_platform_data();
-
 	sdio_unregister_driver(&wl1271_sdio_driver);
-
-	if (wlan_data->set_power)
-		wlan_data->set_power(0);
 }
 
 module_init(wl1271_init);
