@@ -7159,6 +7159,9 @@ static int __devinit wl12xx_probe(struct platform_device *pdev)
 		goto out_disable_sgi;
 	}
 
+	if (sysfs_create_link(&platform_bus.kobj, &wl->dev->kobj, "wl1271") < 0)
+		wl1271_warning("failed to create sysfs link wl1271");
+
 	return 0;
 
 out_disable_sgi:

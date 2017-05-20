@@ -168,6 +168,9 @@ int wlcore_sysfs_init(struct wl1271 *wl)
 		goto out_hw_pg_ver;
 	}
 
+	if (sysfs_create_link(&platform_bus.kobj, &wl->dev->kobj, "wl1271") < 0)
+		wl1271_warning("failed to create sysfs link wl1271");
+
 	goto out;
 
 out_hw_pg_ver:
