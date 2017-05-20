@@ -56,7 +56,7 @@ static int wpa_driver_toggle_btcoex_state(char state)
 
 	wpa_printf(MSG_DEBUG, "%s:  set btcoex state to '%c' result = %d", __func__,
 		   state, ret);
-	return ret;
+	return (ret > 0) ? 0 : -1;
 }
 
 int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
