@@ -5620,7 +5620,11 @@ static int nl80211_get_low_signal_mesh(struct sk_buff *skb,
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!msg)
 		return -ENOMEM;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0)
+	hdr = nl80211hdr_put(msg, info->snd_pid, info->snd_seq, 0,
+#else
 	hdr = nl80211hdr_put(msg, info->snd_portid, info->snd_seq, 0,
+#endif
 			     NL80211_CMD_GET_LOW_SIGNAL_MESH);
 	if (!hdr)
 		goto out;
