@@ -80,6 +80,22 @@ static inline void dev_consume_skb_any(struct sk_buff *skb)
 {
 	dev_kfree_skb_any(skb);
 }
+
+#if (LINUX_VERSION_CODE != KERNEL_VERSION(3,13,11) || UTS_UBUNTU_RELEASE_ABI < 24)
+struct pcpu_sw_netstats {
+	u64     rx_packets;
+	u64     rx_bytes;
+	u64     tx_packets;
+	u64     tx_bytes;
+	struct u64_stats_sync   syncp;
+};
+#endif
+
+#define netdev_tstats(dev)	((struct pcpu_sw_netstats *)dev->ml_priv)
+#define netdev_assign_tstats(dev, e)	dev->ml_priv = (e);
+#else
+#define netdev_tstats(dev)	dev->tstats
+#define netdev_assign_tstats(dev, e)	dev->tstats = (e);
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0) */
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,7,8)
@@ -259,5 +275,51 @@ netdev_features_t passthru_features_check(struct sk_buff *skb,
 					  struct net_device *dev,
 					  netdev_features_t features);
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
+
+#ifndef netdev_alloc_pcpu_stats
+#define netdev_alloc_pcpu_stats(type)				\
+({								\
+	typeof(type) __percpu *pcpu_stats = alloc_percpu(type); \
+	if (pcpu_stats)	{					\
+		int i;						\
+		for_each_possible_cpu(i) {			\
+			typeof(type) *stat;			\
+			stat = per_cpu_ptr(pcpu_stats, i);	\
+			u64_stats_init(&stat->syncp);		\
+		}						\
+	}							\
+	pcpu_stats;						\
+})
+#endif /* netdev_alloc_pcpu_stats */
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+#define napi_complete_done LINUX_BACKPORT(napi_complete_done)
+static inline void napi_complete_done(struct napi_struct *n, int work_done)
+{
+	napi_complete(n);
+}
+#endif /* < 3.19 */
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+#define netif_tx_napi_add LINUX_BACKPORT(netif_tx_napi_add)
+/**
+ *	netif_tx_napi_add - initialize a napi context
+ *	@dev:  network device
+ *	@napi: napi context
+ *	@poll: polling function
+ *	@weight: default weight
+ *
+ * This variant of netif_napi_add() should be used from drivers using NAPI
+ * to exclusively poll a TX queue.
+ * This will avoid we add it into napi_hash[], thus polluting this hash table.
+ */
+static inline void netif_tx_napi_add(struct net_device *dev,
+				     struct napi_struct *napi,
+				     int (*poll)(struct napi_struct *, int),
+				     int weight)
+{
+	netif_napi_add(dev, napi, poll, weight);
+}
+#endif /* < 4.5 */
 
 #endif /* __BACKPORT_NETDEVICE_H */

@@ -26,6 +26,36 @@
 #define led_set_brightness(_dev, _switch) led_brightness_set(_dev, _switch)
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,6,0) */
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+/*
+ * There is no LINUX_BACKPORT() guard here because we want it to point to
+ * the original function which is exported normally.
+ */
+#ifdef CONFIG_LEDS_TRIGGERS
+extern void led_trigger_remove(struct led_classdev *led_cdev);
+#else
+static inline void led_trigger_remove(struct led_classdev *led_cdev) {}
+#endif
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0) && \
+    LINUX_VERSION_CODE >= KERNEL_VERSION(3,19,0)
+#define led_set_brightness_sync LINUX_BACKPORT(led_set_brightness_sync)
+/**
+ * led_set_brightness_sync - set LED brightness synchronously
+ * @led_cdev: the LED to set
+ * @brightness: the brightness to set it to
+ *
+ * Set an LED's brightness immediately. This function will block
+ * the caller for the time required for accessing device registers,
+ * and it can sleep.
+ *
+ * Returns: 0 on success or negative error value on failure
+ */
+extern int led_set_brightness_sync(struct led_classdev *led_cdev,
+				   enum led_brightness value);
+#endif /* < 4.5 && >= 3.19 */
+
 #include <backport/leds-disabled.h>
 
 #endif /* __BACKPORT_LINUX_LEDS_H */

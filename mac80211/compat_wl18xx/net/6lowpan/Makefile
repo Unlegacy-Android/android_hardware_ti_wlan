@@ -1,6 +1,6 @@
 obj-$(CPTCFG_6LOWPAN) += 6lowpan.o
 
-6lowpan-y := iphc.o nhc.o
+6lowpan-y := core.o iphc.o nhc.o
 
 #rfc6282 nhcs
 obj-$(CPTCFG_6LOWPAN_NHC_DEST) += nhc_dest.o

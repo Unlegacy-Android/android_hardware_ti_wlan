@@ -12,7 +12,8 @@ obj-y        +=	ttpci/		\
 		ngene/		\
 		ddbridge/	\
 		saa7146/	\
-		smipcie/
+		smipcie/	\
+		netup_unidvb/
 
 obj-$(CPTCFG_VIDEO_IVTV) += ivtv/
 obj-$(CPTCFG_VIDEO_ZORAN) += zoran/
@@ -24,6 +25,8 @@ obj-$(CPTCFG_VIDEO_BT848) += bt8xx/
 obj-$(CPTCFG_VIDEO_SAA7134) += saa7134/
 obj-$(CPTCFG_VIDEO_SAA7164) += saa7164/
 obj-$(CPTCFG_VIDEO_TW68) += tw68/
+obj-$(CPTCFG_VIDEO_DT3155) += dt3155/
 obj-$(CPTCFG_VIDEO_MEYE) += meye/
 obj-$(CPTCFG_STA2X11_VIP) += sta2x11/
 obj-$(CPTCFG_VIDEO_SOLO6X10) += solo6x10/
+obj-$(CPTCFG_VIDEO_COBALT) += cobalt/

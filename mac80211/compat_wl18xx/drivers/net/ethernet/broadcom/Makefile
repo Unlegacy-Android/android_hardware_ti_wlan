@@ -12,3 +12,4 @@ obj-$(CPTCFG_B44) += b44.o
 #obj-$(CPTCFG_TIGON3) += tg3.o
 #obj-$(CPTCFG_BGMAC) += bgmac.o
 #obj-$(CPTCFG_SYSTEMPORT) += bcmsysport.o
+#obj-$(CPTCFG_BNXT) += bnxt/

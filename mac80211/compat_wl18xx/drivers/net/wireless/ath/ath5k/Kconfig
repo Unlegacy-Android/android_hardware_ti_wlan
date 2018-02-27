@@ -6,7 +6,6 @@ config ATH5K
 	select MAC80211_LEDS
 	select BPAUTO_LEDS_CLASS
 	select BPAUTO_NEW_LEDS
-	select BPAUTO_AVERAGE
 	select ATH5K_AHB if ATH25
 	select ATH5K_PCI if !ATH25
 	---help---

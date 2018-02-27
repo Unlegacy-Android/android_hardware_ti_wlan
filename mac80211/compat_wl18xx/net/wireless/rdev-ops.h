@@ -349,6 +349,18 @@ static inline int rdev_leave_mesh(struct cfg80211_registered_device *rdev,
 	return ret;
 }
 
+static
+inline int rdev_get_low_signal_mesh(struct cfg80211_registered_device *rdev,
+				    struct net_device *dev,
+				    u8 *mac_addr)
+{
+	int ret;
+        trace_rdev_get_low_signal_mesh(&rdev->wiphy, dev);
+	ret = rdev->ops->get_low_signal_mesh(&rdev->wiphy, dev, mac_addr);
+	trace_rdev_return_int(&rdev->wiphy, ret);
+	return ret;
+}
+
 static inline int rdev_join_ocb(struct cfg80211_registered_device *rdev,
 				struct net_device *dev,
 				struct ocb_setup *setup)
@@ -425,6 +437,14 @@ static inline int rdev_scan(struct cfg80211_registered_device *rdev,
 	ret = rdev->ops->scan(&rdev->wiphy, request);
 	trace_rdev_return_int(&rdev->wiphy, ret);
 	return ret;
+}
+
+static inline void rdev_abort_scan(struct cfg80211_registered_device *rdev,
+				   struct wireless_dev *wdev)
+{
+	trace_rdev_abort_scan(&rdev->wiphy, wdev);
+	rdev->ops->abort_scan(&rdev->wiphy, wdev);
+	trace_rdev_return_void(&rdev->wiphy);
 }
 
 static inline int rdev_auth(struct cfg80211_registered_device *rdev,
@@ -733,6 +753,8 @@ static inline void
 rdev_mgmt_frame_register(struct cfg80211_registered_device *rdev,
 			 struct wireless_dev *wdev, u16 frame_type, bool reg)
 {
+	might_sleep();
+
 	trace_rdev_mgmt_frame_register(&rdev->wiphy, wdev , frame_type, reg);
 	rdev->ops->mgmt_frame_register(&rdev->wiphy, wdev , frame_type, reg);
 	trace_rdev_return_void(&rdev->wiphy);

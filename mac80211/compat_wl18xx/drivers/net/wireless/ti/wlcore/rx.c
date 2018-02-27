@@ -75,12 +75,11 @@ static void wl1271_rx_status(struct wl1271 *wl,
 		status->flag |= RX_FLAG_HT;
 
 	/*
-	 * Read the signal level and antenna diversity indication.
-	 * The msb in the signal level is always set as it is a
-	 * negative number.
-	 * The antenna indication is the msb of the rssi.
-	 */
-
+	* Read the signal level and antenna diversity indication.
+	* The msb in the signal level is always set as it is a
+	* negative number.
+	* The antenna indication is the msb of the rssi.
+	*/
 	status->signal = ((desc->rssi & RSSI_LEVEL_BITMASK) | BIT(7));
 	status->antenna = ((desc->rssi & ANT_DIVERSITY_BITMASK) >> 7);
 
@@ -150,7 +149,6 @@ static int wl1271_rx_handle_data(struct wl1271 *wl, u8 *data, u32 length,
 	if (desc->packet_class == WL12XX_RX_CLASS_LOGGER) {
 		size_t len = length - sizeof(*desc);
 		wl12xx_copy_fwlog(wl, data + sizeof(*desc), len);
-		wake_up_interruptible(&wl->fwlog_waitq);
 		return 0;
 	}
 
@@ -228,6 +226,13 @@ int wlcore_rx(struct wl1271 *wl, struct wl_fw_status *status)
 	u8 hlid;
 	enum wl_rx_buf_align rx_align;
 	int ret = 0;
+
+	/* update rates per link */
+	hlid = status->counters.hlid;
+
+	if (hlid < WLCORE_MAX_LINKS)
+		wl->links[hlid].fw_rate_mbps =
+				status->counters.tx_last_rate_mbps;
 
 	while (drv_rx_counter != fw_rx_counter) {
 		buf_size = 0;

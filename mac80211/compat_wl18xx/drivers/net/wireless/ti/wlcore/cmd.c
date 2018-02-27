@@ -629,11 +629,14 @@ int wl12xx_cmd_role_start_ap(struct wl1271 *wl, struct wl12xx_vif *wlvif)
 
 	wl1271_debug(DEBUG_CMD, "cmd role start ap %d", wlvif->role_id);
 
-	/* trying to use hidden SSID with an old hostapd version */
-	if (wlvif->ssid_len == 0 && !bss_conf->hidden_ssid) {
-		wl1271_error("got a null SSID from beacon/bss");
-		ret = -EINVAL;
-		goto out;
+	/* If MESH --> ssid_len is always 0 */
+	if (!ieee80211_vif_is_mesh(vif)) {
+		/* trying to use hidden SSID with an old hostapd version */
+		if (wlvif->ssid_len == 0 && !bss_conf->hidden_ssid) {
+			wl1271_error("got a null SSID from beacon/bss");
+			ret = -EINVAL;
+			goto out;
+		}
 	}
 
 	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
@@ -1430,7 +1433,7 @@ out:
 int wl1271_cmd_set_ap_key(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			  u16 action, u8 id, u8 key_type,
 			  u8 key_size, const u8 *key, u8 hlid, u32 tx_seq_32,
-			  u16 tx_seq_16)
+			  u16 tx_seq_16, bool is_pairwise)
 {
 	struct wl1271_cmd_set_keys *cmd;
 	int ret = 0;
@@ -1445,8 +1448,10 @@ int wl1271_cmd_set_ap_key(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			lid_type = WEP_DEFAULT_LID_TYPE;
 		else
 			lid_type = BROADCAST_LID_TYPE;
-	} else {
+	} else if (is_pairwise) {
 		lid_type = UNICAST_LID_TYPE;
+	} else {
+		lid_type = BROADCAST_LID_TYPE;
 	}
 
 	wl1271_debug(DEBUG_CRYPT, "ap key action: %d id: %d lid: %d type: %d"

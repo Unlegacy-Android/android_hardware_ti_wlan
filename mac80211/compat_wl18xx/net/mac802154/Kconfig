@@ -3,6 +3,7 @@ config MAC802154
 	depends on m
 	depends on IEEE802154
 	depends on CRC_CCITT
+	depends on CRYPTO
 	depends on CRYPTO_AUTHENC
 	select BPAUTO_CRYPTO_CCM
 	depends on CRYPTO_CTR

@@ -33,7 +33,7 @@
 
 #include "selftest.h"
 
-#define VERSION "2.20"
+#define VERSION "2.21"
 
 /* Bluetooth sockets */
 #define BT_MAX_PROTO	8
@@ -210,13 +210,8 @@ struct sock *bt_accept_dequeue(struct sock *parent, struct socket *newsock)
 }
 EXPORT_SYMBOL(bt_accept_dequeue);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 int bt_sock_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 		    int flags)
-#else
-int bt_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
-				struct msghdr *msg, size_t len, int flags)
-#endif
 {
 	int noblock = flags & MSG_DONTWAIT;
 	struct sock *sk = sock->sk;
@@ -226,7 +221,7 @@ int bt_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	BT_DBG("sock %p sk %p len %zu", sock, sk, len);
 
-	if (flags & (MSG_OOB))
+	if (flags & MSG_OOB)
 		return -EOPNOTSUPP;
 
 	skb = skb_recv_datagram(sk, flags, noblock, &err);
@@ -276,11 +271,11 @@ static long bt_sock_data_wait(struct sock *sk, long timeo)
 		if (signal_pending(current) || !timeo)
 			break;
 
-		set_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
+		sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
 		release_sock(sk);
 		timeo = schedule_timeout(timeo);
 		lock_sock(sk);
-		clear_bit(SOCK_ASYNC_WAITDATA, &sk->sk_socket->flags);
+		sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
 	}
 
 	__set_current_state(TASK_RUNNING);
@@ -288,13 +283,8 @@ static long bt_sock_data_wait(struct sock *sk, long timeo)
 	return timeo;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 int bt_sock_stream_recvmsg(struct socket *sock, struct msghdr *msg,
 			   size_t size, int flags)
-#else
-int bt_sock_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
-			       struct msghdr *msg, size_t size, int flags)
-#endif
 {
 	struct sock *sk = sock->sk;
 	int err = 0;
@@ -451,7 +441,7 @@ unsigned int bt_sock_poll(struct file *file, struct socket *sock,
 	if (!test_bit(BT_SK_SUSPEND, &bt_sk(sk)->flags) && sock_writeable(sk))
 		mask |= POLLOUT | POLLWRNORM | POLLWRBAND;
 	else
-		set_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags);
+		sk_set_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	return mask;
 }

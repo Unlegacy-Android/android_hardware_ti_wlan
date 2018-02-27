@@ -1,5 +1,5 @@
 menu "Customise DVB Frontends"
-	visible if !MEDIA_SUBDRV_AUTOSELECT
+	visible if !MEDIA_SUBDRV_AUTOSELECT || COMPILE_TEST
 
 comment "Multistandard (satellite) frontends"
 	depends on DVB_CORE
@@ -40,9 +40,11 @@ config DVB_STV6110x
 	  A Silicon tuner that supports DVB-S and DVB-S2 modes
 
 config DVB_M88DS3103
-	tristate "Montage M88DS3103"
+	depends on !KERNEL_3_8
+	tristate "Montage Technology M88DS3103"
 	depends on m
 	depends on DVB_CORE && I2C && I2C_MUX
+	depends on REGMAP_I2C
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
 	  Say Y when you want to support this frontend.
@@ -252,6 +254,14 @@ config DVB_CX24117
 	help
 	  A Dual DVB-S/S2 tuner module. Say Y when you want to support this frontend.
 
+config DVB_CX24120
+	tristate "Conexant CX24120 based"
+	depends on m
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  A DVB-S/S2 tuner module. Say Y when you want to support this frontend.
+
 config DVB_SI21XX
 	tristate "Silicon Labs SI21XX based"
 	depends on m
@@ -261,9 +271,11 @@ config DVB_SI21XX
 	  A DVB-S tuner module. Say Y when you want to support this frontend.
 
 config DVB_TS2020
+	depends on !KERNEL_3_8
 	tristate "Montage Tehnology TS2020 based tuners"
 	depends on m
 	depends on DVB_CORE && I2C
+	depends on REGMAP_I2C
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
 	  A DVB-S/S2 silicon tuner. Say Y when you want to support this tuner.
@@ -286,9 +298,11 @@ config DVB_MB86A16
 	  Say Y when you want to support this frontend.
 
 config DVB_TDA10071
+	depends on !KERNEL_3_4
 	tristate "NXP TDA10071"
 	depends on m
 	depends on DVB_CORE && I2C
+	depends on REGMAP
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
 	  Say Y when you want to support this frontend.
@@ -491,6 +505,14 @@ config DVB_STV0367
 
 config DVB_CXD2820R
 	tristate "Sony CXD2820R"
+	depends on m
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  Say Y when you want to support this frontend.
+
+config DVB_CXD2841ER
+	tristate "Sony CXD2841ER"
 	depends on m
 	depends on DVB_CORE && I2C
 	default m if !MEDIA_SUBDRV_AUTOSELECT
@@ -790,6 +812,15 @@ comment "SEC control devices for DVB-S"
 
 source "drivers/media/dvb-frontends/drx39xyj/Kconfig"
 
+config DVB_LNBH25
+	tristate "LNBH25 SEC controller"
+	depends on m
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  An SEC control chip.
+	  Say Y when you want to support this chip.
+
 config DVB_LNBP21
 	tristate "LNBP21/LNBH24 SEC controllers"
 	depends on m
@@ -906,6 +937,22 @@ config DVB_AF9033
 	depends on m
 	depends on DVB_CORE && I2C
 	default m if !MEDIA_SUBDRV_AUTOSELECT
+
+config DVB_HORUS3A
+	tristate "Sony Horus3A tuner"
+	depends on m
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  Say Y when you want to support this frontend.
+
+config DVB_ASCOT2E
+	tristate "Sony Ascot2E tuner"
+	depends on m
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  Say Y when you want to support this frontend.
 
 comment "Tools to develop new frontends"
 

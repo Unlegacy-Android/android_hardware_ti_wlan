@@ -277,12 +277,12 @@ static struct proto rfcomm_proto = {
 	.obj_size	= sizeof(struct rfcomm_pinfo)
 };
 
-static struct sock *rfcomm_sock_alloc(struct net *net, struct socket *sock, int proto, gfp_t prio)
+static struct sock *rfcomm_sock_alloc(struct net *net, struct socket *sock, int proto, gfp_t prio, int kern)
 {
 	struct rfcomm_dlc *d;
 	struct sock *sk;
 
-	sk = sk_alloc(net, PF_BLUETOOTH, prio, &rfcomm_proto);
+	sk = sk_alloc(net, PF_BLUETOOTH, prio, &rfcomm_proto, kern);
 	if (!sk)
 		return NULL;
 
@@ -332,7 +332,7 @@ static int rfcomm_sock_create(struct net *net, struct socket *sock,
 
 	sock->ops = &rfcomm_sock_ops;
 
-	sk = rfcomm_sock_alloc(net, sock, protocol, GFP_ATOMIC);
+	sk = rfcomm_sock_alloc(net, sock, protocol, GFP_ATOMIC, kern);
 	if (!sk)
 		return -ENOMEM;
 
@@ -342,15 +342,18 @@ static int rfcomm_sock_create(struct net *net, struct socket *sock,
 
 static int rfcomm_sock_bind(struct socket *sock, struct sockaddr *addr, int addr_len)
 {
-	struct sockaddr_rc *sa = (struct sockaddr_rc *) addr;
+	struct sockaddr_rc sa;
 	struct sock *sk = sock->sk;
-	int chan = sa->rc_channel;
-	int err = 0;
-
-	BT_DBG("sk %p %pMR", sk, &sa->rc_bdaddr);
+	int len, err = 0;
 
 	if (!addr || addr->sa_family != AF_BLUETOOTH)
 		return -EINVAL;
+
+	memset(&sa, 0, sizeof(sa));
+	len = min_t(unsigned int, sizeof(sa), addr_len);
+	memcpy(&sa, addr, len);
+
+	BT_DBG("sk %p %pMR", sk, &sa.rc_bdaddr);
 
 	lock_sock(sk);
 
@@ -366,12 +369,13 @@ static int rfcomm_sock_bind(struct socket *sock, struct sockaddr *addr, int addr
 
 	write_lock(&rfcomm_sk_list.lock);
 
-	if (chan && __rfcomm_get_listen_sock_by_addr(chan, &sa->rc_bdaddr)) {
+	if (sa.rc_channel &&
+	    __rfcomm_get_listen_sock_by_addr(sa.rc_channel, &sa.rc_bdaddr)) {
 		err = -EADDRINUSE;
 	} else {
 		/* Save source address */
-		bacpy(&rfcomm_pi(sk)->src, &sa->rc_bdaddr);
-		rfcomm_pi(sk)->channel = chan;
+		bacpy(&rfcomm_pi(sk)->src, &sa.rc_bdaddr);
+		rfcomm_pi(sk)->channel = sa.rc_channel;
 		sk->sk_state = BT_BOUND;
 	}
 
@@ -557,13 +561,8 @@ static int rfcomm_sock_getname(struct socket *sock, struct sockaddr *addr, int *
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int rfcomm_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 			       size_t len)
-#else
-static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
-			       struct msghdr *msg, size_t len)
-#endif
 {
 	struct sock *sk = sock->sk;
 	struct rfcomm_dlc *d = rfcomm_pi(sk)->dlc;
@@ -627,14 +626,16 @@ done:
 
 	return sent;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_rfcomm_sock_sendmsg(struct kiocb *iocb,
+					struct socket *sock,
+					struct msghdr *msg, size_t len){
+	return rfcomm_sock_sendmsg(sock, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int rfcomm_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 			       size_t size, int flags)
-#else
-static int rfcomm_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
-			       struct msghdr *msg, size_t size, int flags)
-#endif
 {
 	struct sock *sk = sock->sk;
 	struct rfcomm_dlc *d = rfcomm_pi(sk)->dlc;
@@ -645,11 +646,7 @@ static int rfcomm_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 		return 0;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	len = bt_sock_stream_recvmsg(sock, msg, size, flags);
-#else
-	len = bt_sock_stream_recvmsg(iocb, sock, msg, size, flags);
-#endif
 
 	lock_sock(sk);
 	if (!(flags & MSG_PEEK) && len > 0)
@@ -661,6 +658,14 @@ static int rfcomm_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	return len;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_rfcomm_sock_recvmsg(struct kiocb *iocb,
+					struct socket *sock,
+					struct msghdr *msg, size_t len,
+					int flags){
+	return rfcomm_sock_recvmsg(sock, msg, len, flags);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 static int rfcomm_sock_setsockopt_old(struct socket *sock, int optname, char __user *optval, unsigned int optlen)
 {
@@ -991,7 +996,7 @@ int rfcomm_connect_ind(struct rfcomm_session *s, u8 channel, struct rfcomm_dlc *
 		goto done;
 	}
 
-	sk = rfcomm_sock_alloc(sock_net(parent), NULL, BTPROTO_RFCOMM, GFP_ATOMIC);
+	sk = rfcomm_sock_alloc(sock_net(parent), NULL, BTPROTO_RFCOMM, GFP_ATOMIC, 0);
 	if (!sk)
 		goto done;
 
@@ -1058,8 +1063,16 @@ static const struct proto_ops rfcomm_sock_ops = {
 	.listen		= rfcomm_sock_listen,
 	.accept		= rfcomm_sock_accept,
 	.getname	= rfcomm_sock_getname,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg	= rfcomm_sock_sendmsg,
+#else
+	.sendmsg = backport_rfcomm_sock_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg	= rfcomm_sock_recvmsg,
+#else
+	.recvmsg = backport_rfcomm_sock_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.shutdown	= rfcomm_sock_shutdown,
 	.setsockopt	= rfcomm_sock_setsockopt,
 	.getsockopt	= rfcomm_sock_getsockopt,

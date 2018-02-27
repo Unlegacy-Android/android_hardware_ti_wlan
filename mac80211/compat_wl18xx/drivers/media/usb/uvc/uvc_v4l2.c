@@ -483,9 +483,6 @@ static int uvc_v4l2_open(struct file *file)
 	uvc_trace(UVC_TRACE_CALLS, "uvc_v4l2_open\n");
 	stream = video_drvdata(file);
 
-	if (stream->dev->state & UVC_DEV_DISCONNECTED)
-		return -ENODEV;
-
 	ret = usb_autopm_get_interface(stream->dev->intf);
 	if (ret < 0)
 		return ret;
@@ -722,6 +719,20 @@ static int uvc_ioctl_qbuf(struct file *file, void *fh, struct v4l2_buffer *buf)
 
 	return uvc_queue_buffer(&stream->queue, buf);
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+static int uvc_ioctl_expbuf(struct file *file, void *fh,
+			    struct v4l2_exportbuffer *exp)
+{
+	struct uvc_fh *handle = fh;
+	struct uvc_streaming *stream = handle->stream;
+
+	if (!uvc_has_privileges(handle))
+		return -EBUSY;
+
+	return uvc_export_buffer(&stream->queue, exp);
+}
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
 static int uvc_ioctl_dqbuf(struct file *file, void *fh, struct v4l2_buffer *buf)
 {
@@ -1478,6 +1489,9 @@ const struct v4l2_ioctl_ops uvc_ioctl_ops = {
 	.vidioc_reqbufs = uvc_ioctl_reqbufs,
 	.vidioc_querybuf = uvc_ioctl_querybuf,
 	.vidioc_qbuf = uvc_ioctl_qbuf,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+	.vidioc_expbuf = uvc_ioctl_expbuf,
+#endif
 	.vidioc_dqbuf = uvc_ioctl_dqbuf,
 	.vidioc_create_bufs = uvc_ioctl_create_bufs,
 	.vidioc_streamon = uvc_ioctl_streamon,

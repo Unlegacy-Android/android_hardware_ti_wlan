@@ -29,7 +29,6 @@
 #include "acx.h"
 #include "cmd.h"
 #include "debugfs.h"
-#include <linux/gpio.h>
 
 #define WL18XX_DEBUGFS_FWSTATS_FILE(a, b, c) \
 	DEBUGFS_FWSTATS_FILE(a, b, c, wl18xx_acx_statistics)
@@ -297,127 +296,6 @@ static const struct file_operations radar_detection_ops = {
 	.llseek = default_llseek,
 };
 
-static ssize_t radar_debug_mode_write(struct file *file,
-				      const char __user *user_buf,
-				      size_t count, loff_t *ppos)
-{
-	struct wl1271 *wl = file->private_data;
-	struct wl12xx_vif *wlvif;
-	unsigned long value;
-	int ret;
-
-	ret = kstrtoul_from_user(user_buf, count, 10, &value);
-	if (ret < 0) {
-		wl1271_warning("illegal value in radar_debug_mode!");
-		return -EINVAL;
-	}
-
-	/* valid values: 0/1 */
-	if (!(value == 0 || value == 1)) {
-		wl1271_warning("value is not in valid!");
-		return -EINVAL;
-	}
-
-	mutex_lock(&wl->mutex);
-
-	wl->radar_debug_mode = value;
-
-	if (unlikely(wl->state != WLCORE_STATE_ON))
-		goto out;
-
-	ret = wl1271_ps_elp_wakeup(wl);
-	if (ret < 0)
-		goto out;
-
-	wl12xx_for_each_wlvif_ap(wl, wlvif) {
-		wlcore_cmd_generic_cfg(wl, wlvif,
-				       WLCORE_CFG_FEATURE_RADAR_DEBUG,
-				       wl->radar_debug_mode, 0);
-	}
-
-	wl1271_ps_elp_sleep(wl);
-out:
-	mutex_unlock(&wl->mutex);
-	return count;
-}
-
-static ssize_t radar_debug_mode_read(struct file *file,
-				     char __user *userbuf,
-				     size_t count, loff_t *ppos)
-{
-	struct wl1271 *wl = file->private_data;
-	return wl1271_format_buffer(userbuf, count, ppos,
-				    "%d\n", wl->radar_debug_mode);
-}
-
-static const struct file_operations radar_debug_mode_ops = {
-	.write = radar_debug_mode_write,
-	.read = radar_debug_mode_read,
-	.open = simple_open,
-	.llseek = default_llseek,
-};
-
-static ssize_t diversity_mode_write(struct file *file,
-				    const char __user *user_buf,
-				    size_t count, loff_t *ppos)
-{
-	struct wl1271 *wl = file->private_data;
-	struct wl12xx_vif *wlvif;
-	unsigned long value;
-	int ret;
-
-	ret = kstrtoul_from_user(user_buf, count, 10, &value);
-	if (ret < 0) {
-		wl1271_warning("illegal value in diversity mode!");
-		return -EINVAL;
-	}
-
-	/* valid values: 0/1 */
-	if (!(value == 0 || value == 1)) {
-		wl1271_warning("value is not in valid!");
-		return -EINVAL;
-	}
-
-	mutex_lock(&wl->mutex);
-
-	wl->diversity_mode = value;
-
-	if (unlikely(wl->state != WLCORE_STATE_ON))
-		goto out;
-
-	ret = wl1271_ps_elp_wakeup(wl);
-	if (ret < 0)
-		goto out;
-
-	wl12xx_for_each_wlvif(wl, wlvif) {
-		wlcore_cmd_generic_cfg(wl, wlvif,
-				       WLCORE_CFG_FEATURE_DIVERSITY_MODE,
-				       wl->diversity_mode, 0);
-	}
-
-	wl1271_ps_elp_sleep(wl);
-out:
-	mutex_unlock(&wl->mutex);
-	return count;
-}
-
-static ssize_t diversity_mode_read(struct file *file,
-				   char __user *userbuf,
-				   size_t count, loff_t *ppos)
-{
-	struct wl1271 *wl = file->private_data;
-
-	return wl1271_format_buffer(userbuf, count, ppos,
-					"%d\n", wl->diversity_mode);
-}
-
-static const struct file_operations diversity_mode_ops = {
-	.write = diversity_mode_write,
-	.read = diversity_mode_read,
-	.open = simple_open,
-	.llseek = default_llseek,
-};
-
 static ssize_t dynamic_fw_traces_write(struct file *file,
 					const char __user *user_buf,
 					size_t count, loff_t *ppos)
@@ -467,48 +345,194 @@ static const struct file_operations dynamic_fw_traces_ops = {
 	.llseek = default_llseek,
 };
 
-static ssize_t time_sync_write(struct file *file,
-				const char __user *user_buf,
-				size_t count, loff_t *ppos)
-{
+
+static ssize_t time_sync_zone_addr_write(struct file *file,
+					 const char __user *user_buf,
+					 size_t count, loff_t *ppos) {
 	struct wl1271 *wl = file->private_data;
-	unsigned long value;
+	char buf[(ETH_ALEN * 2)];
 	int ret;
 
-	ret = kstrtoul_from_user(user_buf, count, 0, &value);
-	if (ret < 0) {
-		wl1271_warning("Illegal interval for time sync");
+	if (count < (ETH_ALEN * 2 + 1)) {
+		wl1271_warning("Illegal MAC address: wrong size");
 		return -EINVAL;
 	}
 
-	if (value > 1000) {
-		wl1271_warning("Time sync interval must be between 0 and 1000");
+	ret = copy_from_user(buf, user_buf, (ETH_ALEN * 2));
+	if (ret < 0)
+		return ret;
+
+	ret = hex2bin(wl->zone_master_mac_addr, buf, ETH_ALEN);
+	if (ret < 0) {
+		wl1271_warning("Illegal MAC address: invalid characters");
+		return ret;
+	}
+
+	mutex_lock(&wl->mutex);
+
+	if (unlikely(wl->state != WLCORE_STATE_ON))
+		goto out;
+
+	ret = wl1271_ps_elp_wakeup(wl);
+	if (ret < 0)
+		goto out;
+
+	ret = wl18xx_acx_time_sync_cfg(wl);
+	if (ret < 0)
+		count = ret;
+
+	wl1271_ps_elp_sleep(wl);
+out:
+	mutex_unlock(&wl->mutex);
+	return count;
+}
+
+static ssize_t time_sync_zone_addr_read(struct file *file,
+					char __user *userbuf,
+					size_t count, loff_t *ppos)
+{
+	struct wl1271 *wl = file->private_data;
+
+	return wl1271_format_buffer(userbuf, count, ppos,
+					"%pM\n", wl->zone_master_mac_addr);
+}
+
+static const struct file_operations time_sync_zone_addr_ops = {
+	.write  = time_sync_zone_addr_write,
+	.read = time_sync_zone_addr_read,
+	.open   = simple_open,
+	.llseek = default_llseek,
+};
+
+#ifdef CPTCFG_CFG80211_CERTIFICATION_ONUS
+static ssize_t radar_debug_mode_write(struct file *file,
+                                     const char __user *user_buf,
+                                     size_t count, loff_t *ppos)
+{
+       struct wl1271 *wl = file->private_data;
+       struct wl12xx_vif *wlvif;
+       unsigned long value;
+       int ret;
+
+       ret = kstrtoul_from_user(user_buf, count, 10, &value);
+       if (ret < 0) {
+               wl1271_warning("illegal radar_debug_mode value!");
+               return -EINVAL;
+       }
+
+       /* valid values: 0/1 */
+       if (!(value == 0 || value == 1)) {
+               wl1271_warning("value is not in valid!");
+               return -EINVAL;
+       }
+
+       mutex_lock(&wl->mutex);
+
+       wl->radar_debug_mode = value;
+
+       if (unlikely(wl->state != WLCORE_STATE_ON))
+               goto out;
+
+       ret = wl1271_ps_elp_wakeup(wl);
+       if (ret < 0)
+               goto out;
+
+       wl12xx_for_each_wlvif_ap(wl, wlvif) {
+               wlcore_cmd_generic_cfg(wl, wlvif,
+                                      WLCORE_CFG_FEATURE_RADAR_DEBUG,
+                                      wl->radar_debug_mode, 0);
+       }
+
+       wl1271_ps_elp_sleep(wl);
+out:
+       mutex_unlock(&wl->mutex);
+       return count;
+}
+
+static ssize_t radar_debug_mode_read(struct file *file,
+                                    char __user *userbuf,
+                                    size_t count, loff_t *ppos)
+{
+       struct wl1271 *wl = file->private_data;
+
+       return wl1271_format_buffer(userbuf, count, ppos,
+                                   "%d\n", wl->radar_debug_mode);
+}
+
+static const struct file_operations radar_debug_mode_ops = {
+       .write = radar_debug_mode_write,
+       .read = radar_debug_mode_read,
+       .open = simple_open,
+       .llseek = default_llseek,
+};
+#endif /* CFG80211_CERTIFICATION_ONUS */
+
+static ssize_t sg_params_write(struct file *file,
+				      const char __user *user_buf,
+				      size_t count, loff_t *ppos)
+{
+	struct wl1271 *wl = file->private_data;
+	struct conf_sg_settings *c = &wl->conf.sg;
+	struct acx_bt_wlan_coex_param *param;
+	u32 attr, value;
+	int ret;
+	char buf[64];
+
+	simple_write_to_buffer(buf, sizeof(buf) - 1, ppos, user_buf, count);
+
+	/* make sure that buf is null terminated */
+	buf[sizeof(buf) - 1] = '\0';
+
+	ret = sscanf(buf, "%u %u", &attr, &value);
+	if (ret != 2) {
+		wl1271_warning("illegal number of inputs!");
+		return -EINVAL;
+	}
+
+	switch (attr) {
+	case WL18XX_CONF_SG_ZIGBEE_COEX:
+		if ((value < 0) || (value > 2)) {
+			wl1271_warning("illegal value for this attribute");
+			return -ERANGE;
+		}
+		break;
+
+	default:
+		wl1271_warning("illegal attribute");
 		return -ERANGE;
 	}
 
 	mutex_lock(&wl->mutex);
 
-	wl->time_sync.interval_ms = value;
+	if (unlikely(wl->state != WLCORE_STATE_ON))
+		goto out;
 
-	if (value == 0) {
-		hrtimer_cancel(&wl->time_sync.timer);
-	} else {
-		wl1271_info("Triggering time sync GPIO");
-		wlcore_trigger_time_sync(wl);
+	ret = wl1271_ps_elp_wakeup(wl);
+	if (ret < 0)
+		goto out;
+
+	param = kzalloc(sizeof(*param), GFP_KERNEL);
+	if (!param) {
+		ret = -ENOMEM;
+		goto out;
 	}
+	param->params[attr] = cpu_to_le32(value);
+	param->param_idx = attr;
+	c->params[attr] = cpu_to_le32(value);
 
+	wl1271_cmd_configure(wl, ACX_SG_CFG, param, sizeof(*param));
+
+	wl1271_ps_elp_sleep(wl);
+out:
 	mutex_unlock(&wl->mutex);
-
 	return count;
 }
 
-static const struct file_operations time_sync_ops = {
-    .write  = time_sync_write,
-    .open   = simple_open,
-    .llseek = default_llseek,
+static const struct file_operations sg_params_ops = {
+	.write = sg_params_write,
+	.open = simple_open,
+	.llseek = default_llseek,
 };
-
-
 
 int wl18xx_debugfs_add_files(struct wl1271 *wl,
 			     struct dentry *rootdir)
@@ -675,10 +699,12 @@ int wl18xx_debugfs_add_files(struct wl1271 *wl,
 
 	DEBUGFS_ADD(conf, moddir);
 	DEBUGFS_ADD(radar_detection, moddir);
-	DEBUGFS_ADD(time_sync, moddir);
+	DEBUGFS_ADD(time_sync_zone_addr, moddir);
+#ifdef CPTCFG_CFG80211_CERTIFICATION_ONUS
 	DEBUGFS_ADD(radar_debug_mode, moddir);
+#endif
 	DEBUGFS_ADD(dynamic_fw_traces, moddir);
-	DEBUGFS_ADD(diversity_mode, moddir);
+	DEBUGFS_ADD(sg_params, moddir);
 
 	return 0;
 

@@ -17,17 +17,15 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 
-#include <media/videobuf2-core.h>
+#include <media/videobuf2-v4l2.h>
 #include <media/videobuf2-vmalloc.h>
 #include <media/videobuf2-memops.h>
 
 struct vb2_vmalloc_buf {
 	void				*vaddr;
-	struct page			**pages;
-	struct vm_area_struct		*vma;
+	struct frame_vector		*vec;
 	enum dma_data_direction		dma_dir;
 	unsigned long			size;
-	unsigned int			n_pages;
 	atomic_t			refcount;
 	struct vb2_vmarea_handler	handler;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
@@ -78,10 +76,8 @@ static void *vb2_vmalloc_get_userptr(void *alloc_ctx, unsigned long vaddr,
 				     enum dma_data_direction dma_dir)
 {
 	struct vb2_vmalloc_buf *buf;
-	unsigned long first, last;
-	int n_pages, offset;
-	struct vm_area_struct *vma;
-	dma_addr_t physp;
+	struct frame_vector *vec;
+	int n_pages, offset, i;
 
 	buf = kzalloc(sizeof(*buf), GFP_KERNEL);
 	if (!buf)
@@ -90,51 +86,36 @@ static void *vb2_vmalloc_get_userptr(void *alloc_ctx, unsigned long vaddr,
 	buf->dma_dir = dma_dir;
 	offset = vaddr & ~PAGE_MASK;
 	buf->size = size;
+	vec = vb2_create_framevec(vaddr, size, dma_dir == DMA_FROM_DEVICE);
+	if (IS_ERR(vec))
+		goto fail_pfnvec_create;
+	buf->vec = vec;
+	n_pages = frame_vector_count(vec);
+	if (frame_vector_to_pages(vec) < 0) {
+		unsigned long *nums = frame_vector_pfns(vec);
 
-
-	vma = find_vma(current->mm, vaddr);
-	if (vma && (vma->vm_flags & VM_PFNMAP) && (vma->vm_pgoff)) {
-		if (vb2_get_contig_userptr(vaddr, size, &vma, &physp))
-			goto fail_pages_array_alloc;
-		buf->vma = vma;
-		buf->vaddr = (__force void *)ioremap_nocache(physp, size);
-		if (!buf->vaddr)
-			goto fail_pages_array_alloc;
+		/*
+		 * We cannot get page pointers for these pfns. Check memory is
+		 * physically contiguous and use direct mapping.
+		 */
+		for (i = 1; i < n_pages; i++)
+			if (nums[i-1] + 1 != nums[i])
+				goto fail_map;
+		buf->vaddr = (__force void *)
+				ioremap_nocache(nums[0] << PAGE_SHIFT, size);
 	} else {
-		first = vaddr >> PAGE_SHIFT;
-		last  = (vaddr + size - 1) >> PAGE_SHIFT;
-		buf->n_pages = last - first + 1;
-		buf->pages = kzalloc(buf->n_pages * sizeof(struct page *),
-				     GFP_KERNEL);
-		if (!buf->pages)
-			goto fail_pages_array_alloc;
-
-		/* current->mm->mmap_sem is taken by videobuf2 core */
-		n_pages = get_user_pages(current, current->mm,
-					 vaddr & PAGE_MASK, buf->n_pages,
-					 dma_dir == DMA_FROM_DEVICE,
-					 1, /* force */
-					 buf->pages, NULL);
-		if (n_pages != buf->n_pages)
-			goto fail_get_user_pages;
-
-		buf->vaddr = vm_map_ram(buf->pages, buf->n_pages, -1,
+		buf->vaddr = vm_map_ram(frame_vector_pages(vec), n_pages, -1,
 					PAGE_KERNEL);
-		if (!buf->vaddr)
-			goto fail_get_user_pages;
 	}
 
+	if (!buf->vaddr)
+		goto fail_map;
 	buf->vaddr += offset;
 	return buf;
 
-fail_get_user_pages:
-	pr_debug("get_user_pages requested/got: %d/%d]\n", n_pages,
-		 buf->n_pages);
-	while (--n_pages >= 0)
-		put_page(buf->pages[n_pages]);
-	kfree(buf->pages);
-
-fail_pages_array_alloc:
+fail_map:
+	vb2_destroy_framevec(vec);
+fail_pfnvec_create:
 	kfree(buf);
 
 	return NULL;
@@ -145,20 +126,21 @@ static void vb2_vmalloc_put_userptr(void *buf_priv)
 	struct vb2_vmalloc_buf *buf = buf_priv;
 	unsigned long vaddr = (unsigned long)buf->vaddr & PAGE_MASK;
 	unsigned int i;
+	struct page **pages;
+	unsigned int n_pages;
 
-	if (buf->pages) {
+	if (!buf->vec->is_pfns) {
+		n_pages = frame_vector_count(buf->vec);
+		pages = frame_vector_pages(buf->vec);
 		if (vaddr)
-			vm_unmap_ram((void *)vaddr, buf->n_pages);
-		for (i = 0; i < buf->n_pages; ++i) {
-			if (buf->dma_dir == DMA_FROM_DEVICE)
-				set_page_dirty_lock(buf->pages[i]);
-			put_page(buf->pages[i]);
-		}
-		kfree(buf->pages);
+			vm_unmap_ram((void *)vaddr, n_pages);
+		if (buf->dma_dir == DMA_FROM_DEVICE)
+			for (i = 0; i < n_pages; i++)
+				set_page_dirty_lock(pages[i]);
 	} else {
-		vb2_put_vma(buf->vma);
 		iounmap((__force void __iomem *)buf->vaddr);
 	}
+	vb2_destroy_framevec(buf->vec);
 	kfree(buf);
 }
 
@@ -213,7 +195,6 @@ static int vb2_vmalloc_mmap(void *buf_priv, struct vm_area_struct *vma)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 #ifdef CONFIG_HAS_DMA
 /*********************************************/
 /*         DMABUF ops for exporters          */
@@ -224,6 +205,7 @@ struct vb2_vmalloc_attachment {
 	enum dma_data_direction dma_dir;
 };
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static int vb2_vmalloc_dmabuf_ops_attach(struct dma_buf *dbuf, struct device *dev,
 	struct dma_buf_attachment *dbuf_attach)
 {
@@ -262,7 +244,9 @@ static int vb2_vmalloc_dmabuf_ops_attach(struct dma_buf *dbuf, struct device *de
 	dbuf_attach->priv = attach;
 	return 0;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void vb2_vmalloc_dmabuf_ops_detach(struct dma_buf *dbuf,
 	struct dma_buf_attachment *db_attach)
 {
@@ -282,7 +266,9 @@ static void vb2_vmalloc_dmabuf_ops_detach(struct dma_buf *dbuf,
 	kfree(attach);
 	db_attach->priv = NULL;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static struct sg_table *vb2_vmalloc_dmabuf_ops_map(
 	struct dma_buf_attachment *db_attach, enum dma_data_direction dma_dir)
 {
@@ -290,7 +276,6 @@ static struct sg_table *vb2_vmalloc_dmabuf_ops_map(
 	/* stealing dmabuf mutex to serialize map/unmap operations */
 	struct mutex *lock = &db_attach->dmabuf->lock;
 	struct sg_table *sgt;
-	int ret;
 
 	mutex_lock(lock);
 
@@ -309,8 +294,9 @@ static struct sg_table *vb2_vmalloc_dmabuf_ops_map(
 	}
 
 	/* mapping to the client with new direction */
-	ret = dma_map_sg(db_attach->dev, sgt->sgl, sgt->orig_nents, dma_dir);
-	if (ret <= 0) {
+	sgt->nents = dma_map_sg(db_attach->dev, sgt->sgl, sgt->orig_nents,
+				dma_dir);
+	if (!sgt->nents) {
 		pr_err("failed to map scatterlist\n");
 		mutex_unlock(lock);
 		return ERR_PTR(-EIO);
@@ -322,39 +308,51 @@ static struct sg_table *vb2_vmalloc_dmabuf_ops_map(
 
 	return sgt;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void vb2_vmalloc_dmabuf_ops_unmap(struct dma_buf_attachment *db_attach,
 	struct sg_table *sgt, enum dma_data_direction dma_dir)
 {
 	/* nothing to be done here */
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void vb2_vmalloc_dmabuf_ops_release(struct dma_buf *dbuf)
 {
 	/* drop reference obtained in vb2_vmalloc_get_dmabuf */
 	vb2_vmalloc_put(dbuf->priv);
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void *vb2_vmalloc_dmabuf_ops_kmap(struct dma_buf *dbuf, unsigned long pgnum)
 {
 	struct vb2_vmalloc_buf *buf = dbuf->priv;
 
 	return buf->vaddr + pgnum * PAGE_SIZE;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void *vb2_vmalloc_dmabuf_ops_vmap(struct dma_buf *dbuf)
 {
 	struct vb2_vmalloc_buf *buf = dbuf->priv;
 
 	return buf->vaddr;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static int vb2_vmalloc_dmabuf_ops_mmap(struct dma_buf *dbuf,
 	struct vm_area_struct *vma)
 {
 	return vb2_vmalloc_mmap(dbuf->priv, vma);
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static struct dma_buf_ops vb2_vmalloc_dmabuf_ops = {
 	.attach = vb2_vmalloc_dmabuf_ops_attach,
 	.detach = vb2_vmalloc_dmabuf_ops_detach,
@@ -366,7 +364,9 @@ static struct dma_buf_ops vb2_vmalloc_dmabuf_ops = {
 	.mmap = vb2_vmalloc_dmabuf_ops_mmap,
 	.release = vb2_vmalloc_dmabuf_ops_release,
 };
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static struct dma_buf *vb2_vmalloc_get_dmabuf(void *buf_priv, unsigned long flags)
 {
 	struct vb2_vmalloc_buf *buf = buf_priv;
@@ -390,7 +390,10 @@ static struct dma_buf *vb2_vmalloc_get_dmabuf(void *buf_priv, unsigned long flag
 
 	return dbuf;
 }
-#endif /* CONFIG_HAS_DMA */
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
+#endif 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+/* CONFIG_HAS_DMA */
 
 
 /*********************************************/
@@ -405,7 +408,9 @@ static int vb2_vmalloc_map_dmabuf(void *mem_priv)
 
 	return buf->vaddr ? 0 : -EFAULT;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void vb2_vmalloc_unmap_dmabuf(void *mem_priv)
 {
 	struct vb2_vmalloc_buf *buf = mem_priv;
@@ -413,7 +418,9 @@ static void vb2_vmalloc_unmap_dmabuf(void *mem_priv)
 	dma_buf_vunmap(buf->dbuf, buf->vaddr);
 	buf->vaddr = NULL;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void vb2_vmalloc_detach_dmabuf(void *mem_priv)
 {
 	struct vb2_vmalloc_buf *buf = mem_priv;
@@ -423,7 +430,9 @@ static void vb2_vmalloc_detach_dmabuf(void *mem_priv)
 
 	kfree(buf);
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 static void *vb2_vmalloc_attach_dmabuf(void *alloc_ctx, struct dma_buf *dbuf,
 	unsigned long size, enum dma_data_direction dma_dir)
 {
@@ -450,13 +459,21 @@ const struct vb2_mem_ops vb2_vmalloc_memops = {
 	.put		= vb2_vmalloc_put,
 	.get_userptr	= vb2_vmalloc_get_userptr,
 	.put_userptr	= vb2_vmalloc_put_userptr,
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 #ifdef CONFIG_HAS_DMA
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 	.get_dmabuf	= vb2_vmalloc_get_dmabuf,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 #endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 	.map_dmabuf	= vb2_vmalloc_map_dmabuf,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 	.unmap_dmabuf	= vb2_vmalloc_unmap_dmabuf,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 	.attach_dmabuf	= vb2_vmalloc_attach_dmabuf,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 	.detach_dmabuf	= vb2_vmalloc_detach_dmabuf,
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0) */
 	.vaddr		= vb2_vmalloc_vaddr,

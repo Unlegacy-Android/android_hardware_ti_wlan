@@ -43,7 +43,7 @@ static struct bt_sock_list l2cap_sk_list = {
 static const struct proto_ops l2cap_sock_ops;
 static void l2cap_sock_init(struct sock *sk, struct sock *parent);
 static struct sock *l2cap_sock_alloc(struct net *net, struct socket *sock,
-				     int proto, gfp_t prio);
+				     int proto, gfp_t prio, int kern);
 
 bool l2cap_is_socket(struct socket *sock)
 {
@@ -944,13 +944,8 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname,
 	return err;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int l2cap_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 			      size_t len)
-#else
-static int l2cap_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
-			      struct msghdr *msg, size_t len)
-#endif
 {
 	struct sock *sk = sock->sk;
 	struct l2cap_chan *chan = l2cap_pi(sk)->chan;
@@ -980,14 +975,16 @@ static int l2cap_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	return err;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_l2cap_sock_sendmsg(struct kiocb *iocb,
+				       struct socket *sock,
+				       struct msghdr *msg, size_t len){
+	return l2cap_sock_sendmsg(sock, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int l2cap_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 			      size_t len, int flags)
-#else
-static int l2cap_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
-			      struct msghdr *msg, size_t len, int flags)
-#endif
 {
 	struct sock *sk = sock->sk;
 	struct l2cap_pinfo *pi = l2cap_pi(sk);
@@ -1014,17 +1011,9 @@ static int l2cap_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 	release_sock(sk);
 
 	if (sock->type == SOCK_STREAM)
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 		err = bt_sock_stream_recvmsg(sock, msg, len, flags);
-#else
-		err = bt_sock_stream_recvmsg(iocb, sock, msg, len, flags);
-#endif
 	else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 		err = bt_sock_recvmsg(sock, msg, len, flags);
-#else
-		err = bt_sock_recvmsg(iocb, sock, msg, len, flags);
-#endif
 
 	if (pi->chan->mode != L2CAP_MODE_ERTM)
 		return err;
@@ -1054,6 +1043,14 @@ done:
 	release_sock(sk);
 	return err;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_l2cap_sock_recvmsg(struct kiocb *iocb,
+				       struct socket *sock,
+				       struct msghdr *msg, size_t len,
+				       int flags){
+	return l2cap_sock_recvmsg(sock, msg, len, flags);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 /* Kill socket (only if zapped and orphan)
  * Must be called on unlocked socket.
@@ -1072,18 +1069,23 @@ static void l2cap_sock_kill(struct sock *sk)
 	sock_put(sk);
 }
 
-static int __l2cap_wait_ack(struct sock *sk)
+static int __l2cap_wait_ack(struct sock *sk, struct l2cap_chan *chan)
 {
-	struct l2cap_chan *chan = l2cap_pi(sk)->chan;
 	DECLARE_WAITQUEUE(wait, current);
 	int err = 0;
-	int timeo = HZ/5;
+	int timeo = L2CAP_WAIT_ACK_POLL_PERIOD;
+	/* Timeout to prevent infinite loop */
+	unsigned long timeout = jiffies + L2CAP_WAIT_ACK_TIMEOUT;
 
 	add_wait_queue(sk_sleep(sk), &wait);
 	set_current_state(TASK_INTERRUPTIBLE);
-	while (chan->unacked_frames > 0 && chan->conn) {
+	do {
+		BT_DBG("Waiting for %d ACKs, timeout %04d ms",
+		       chan->unacked_frames, time_after(jiffies, timeout) ? 0 :
+		       jiffies_to_msecs(timeout - jiffies));
+
 		if (!timeo)
-			timeo = HZ/5;
+			timeo = L2CAP_WAIT_ACK_POLL_PERIOD;
 
 		if (signal_pending(current)) {
 			err = sock_intr_errno(timeo);
@@ -1098,7 +1100,15 @@ static int __l2cap_wait_ack(struct sock *sk)
 		err = sock_error(sk);
 		if (err)
 			break;
-	}
+
+		if (time_after(jiffies, timeout)) {
+			err = -ENOLINK;
+			break;
+		}
+
+	} while (chan->unacked_frames > 0 &&
+		 chan->state == BT_CONNECTED);
+
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(sk_sleep(sk), &wait);
 	return err;
@@ -1116,41 +1126,76 @@ static int l2cap_sock_shutdown(struct socket *sock, int how)
 	if (!sk)
 		return 0;
 
+	lock_sock(sk);
+
+	if (sk->sk_shutdown)
+		goto shutdown_already;
+
+	BT_DBG("Handling sock shutdown");
+
+	/* prevent sk structure from being freed whilst unlocked */
+	sock_hold(sk);
+
 	chan = l2cap_pi(sk)->chan;
-	conn = chan->conn;
+	/* prevent chan structure from being freed whilst unlocked */
+	l2cap_chan_hold(chan);
 
 	BT_DBG("chan %p state %s", chan, state_to_string(chan->state));
 
+	if (chan->mode == L2CAP_MODE_ERTM &&
+	    chan->unacked_frames > 0 &&
+	    chan->state == BT_CONNECTED) {
+		err = __l2cap_wait_ack(sk, chan);
+
+		/* After waiting for ACKs, check whether shutdown
+		 * has already been actioned to close the L2CAP
+		 * link such as by l2cap_disconnection_req().
+		 */
+		if (sk->sk_shutdown)
+			goto has_shutdown;
+	}
+
+	sk->sk_shutdown = SHUTDOWN_MASK;
+	release_sock(sk);
+
+	l2cap_chan_lock(chan);
+	conn = chan->conn;
 	if (conn)
+		/* prevent conn structure from being freed */
+		l2cap_conn_get(conn);
+	l2cap_chan_unlock(chan);
+
+	if (conn)
+		/* mutex lock must be taken before l2cap_chan_lock() */
 		mutex_lock(&conn->chan_lock);
 
 	l2cap_chan_lock(chan);
-	lock_sock(sk);
+	l2cap_chan_close(chan, 0);
+	l2cap_chan_unlock(chan);
 
-	if (!sk->sk_shutdown) {
-		if (chan->mode == L2CAP_MODE_ERTM)
-			err = __l2cap_wait_ack(sk);
-
-		sk->sk_shutdown = SHUTDOWN_MASK;
-
-		release_sock(sk);
-		l2cap_chan_close(chan, 0);
-		lock_sock(sk);
-
-		if (sock_flag(sk, SOCK_LINGER) && sk->sk_lingertime &&
-		    !(current->flags & PF_EXITING))
-			err = bt_sock_wait_state(sk, BT_CLOSED,
-						 sk->sk_lingertime);
+	if (conn) {
+		mutex_unlock(&conn->chan_lock);
+		l2cap_conn_put(conn);
 	}
 
+	lock_sock(sk);
+
+	if (sock_flag(sk, SOCK_LINGER) && sk->sk_lingertime &&
+	    !(current->flags & PF_EXITING))
+		err = bt_sock_wait_state(sk, BT_CLOSED,
+					 sk->sk_lingertime);
+
+has_shutdown:
+	l2cap_chan_put(chan);
+	sock_put(sk);
+
+shutdown_already:
 	if (!err && sk->sk_err)
 		err = -sk->sk_err;
 
 	release_sock(sk);
-	l2cap_chan_unlock(chan);
 
-	if (conn)
-		mutex_unlock(&conn->chan_lock);
+	BT_DBG("Sock shutdown complete err: %d", err);
 
 	return err;
 }
@@ -1211,7 +1256,7 @@ static struct l2cap_chan *l2cap_sock_new_connection_cb(struct l2cap_chan *chan)
 	}
 
 	sk = l2cap_sock_alloc(sock_net(parent), NULL, BTPROTO_L2CAP,
-			      GFP_ATOMIC);
+			      GFP_ATOMIC, 0);
 	if (!sk) {
 		release_sock(parent);
 		return NULL;
@@ -1567,12 +1612,12 @@ static struct proto l2cap_proto = {
 };
 
 static struct sock *l2cap_sock_alloc(struct net *net, struct socket *sock,
-				     int proto, gfp_t prio)
+				     int proto, gfp_t prio, int kern)
 {
 	struct sock *sk;
 	struct l2cap_chan *chan;
 
-	sk = sk_alloc(net, PF_BLUETOOTH, prio, &l2cap_proto);
+	sk = sk_alloc(net, PF_BLUETOOTH, prio, &l2cap_proto, kern);
 	if (!sk)
 		return NULL;
 
@@ -1618,7 +1663,7 @@ static int l2cap_sock_create(struct net *net, struct socket *sock, int protocol,
 
 	sock->ops = &l2cap_sock_ops;
 
-	sk = l2cap_sock_alloc(net, sock, protocol, GFP_ATOMIC);
+	sk = l2cap_sock_alloc(net, sock, protocol, GFP_ATOMIC, kern);
 	if (!sk)
 		return -ENOMEM;
 
@@ -1636,8 +1681,16 @@ static const struct proto_ops l2cap_sock_ops = {
 	.listen		= l2cap_sock_listen,
 	.accept		= l2cap_sock_accept,
 	.getname	= l2cap_sock_getname,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg	= l2cap_sock_sendmsg,
+#else
+	.sendmsg = backport_l2cap_sock_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg	= l2cap_sock_recvmsg,
+#else
+	.recvmsg = backport_l2cap_sock_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.poll		= bt_sock_poll,
 	.ioctl		= bt_sock_ioctl,
 	.mmap		= sock_no_mmap,

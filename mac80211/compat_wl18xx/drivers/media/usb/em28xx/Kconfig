@@ -38,6 +38,7 @@ config VIDEO_EM28XX_ALSA
 	  module will be called em28xx-alsa
 
 config VIDEO_EM28XX_DVB
+	depends on !KERNEL_3_8
 	depends on !KERNEL_3_4
 	tristate "DVB/ATSC Support for em28xx based TV cards"
 	depends on m

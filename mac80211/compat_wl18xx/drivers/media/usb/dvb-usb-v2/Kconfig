@@ -112,6 +112,7 @@ config DVB_USB_GL861
 	  receiver with USB ID 0db0:5581.
 
 config DVB_USB_LME2510
+	depends on !KERNEL_3_8
 	tristate "LME DM04/QQBOX DVB-S USB2.0 support"
 	depends on m
 	depends on DVB_USB_V2
@@ -158,6 +159,7 @@ config DVB_USB_RTL28XXU
 	  Say Y here to support the Realtek RTL28xxU DVB USB receiver.
 
 config DVB_USB_DVBSKY
+	depends on !KERNEL_3_8
 	depends on !KERNEL_3_4
 	tristate "DVBSky USB support"
 	depends on m

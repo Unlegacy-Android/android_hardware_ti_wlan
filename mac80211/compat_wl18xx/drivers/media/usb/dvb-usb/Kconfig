@@ -280,6 +280,7 @@ config DVB_USB_PCTV452E
 	  Say Y if you own such a device and want to use it.
 
 config DVB_USB_DW2102
+	depends on !KERNEL_3_8
 	tristate "DvbWorld & TeVii DVB-S/S2 USB2.0 support"
 	depends on m
 	depends on DVB_USB

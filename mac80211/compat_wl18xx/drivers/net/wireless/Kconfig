@@ -35,6 +35,7 @@ config PCMCIA_RAYCS
 	  called ray_cs.  If unsure, say N.
 
 config LIBERTAS_THINFIRM
+	depends on n
 	tristate "Marvell 8xxx Libertas WLAN driver support with thin firmware"
 	depends on m
 	depends on MAC80211
@@ -57,6 +58,7 @@ config LIBERTAS_THINFIRM_USB
 
 config AIRO
 	depends on !KERNEL_3_9
+	depends on n
 	tristate "Cisco/Aironet 34X/35X/4500/4800 ISA and PCI cards"
 	depends on m
 	depends on CFG80211 && ISA_DMA_API && (PCI || BROKEN)
@@ -78,6 +80,7 @@ config AIRO
 	  The driver can be compiled as a module and will be named "airo".
 
 config ATMEL
+	depends on n
       tristate "Atmel at76c50x chipset  802.11b support"
       depends on m
       depends on CFG80211 && (PCI || PCMCIA)
@@ -97,6 +100,7 @@ config ATMEL
         <http://www.thekelleys.org.uk/atmel>
 
 config PCI_ATMEL
+	depends on n
       tristate "Atmel at76c506 PCI cards"
       depends on m
       depends on ATMEL && PCI
@@ -105,6 +109,7 @@ config PCI_ATMEL
         Atmel at76c506 chip.
 
 config PCMCIA_ATMEL
+	depends on n
 	tristate "Atmel at76c502/at76c504 PCMCIA cards"
 	depends on m
 	depends on ATMEL && PCMCIA
@@ -116,6 +121,7 @@ config PCMCIA_ATMEL
 	  Atmel at76c502 and at76c504 chips.
 
 config AT76C50X_USB
+	depends on n
         tristate "Atmel at76c503/at76c505/at76c505a USB cards"
         depends on m
         depends on MAC80211 && USB
@@ -126,6 +132,7 @@ config AT76C50X_USB
 
 config AIRO_CS
 	depends on !KERNEL_3_9
+	depends on n
 	tristate "Cisco/Aironet 34X/35X/4500/4800 PCMCIA cards"
 	depends on m
 	depends on CFG80211 && PCMCIA && (BROKEN || !M32R)
@@ -183,6 +190,7 @@ config PRISM54
 	  When built as module you get the module prism54
 
 config USB_ZD1201
+	depends on n
 	tristate "USB ZD1201 based Wireless device support"
 	depends on m
 	depends on CFG80211 && USB
@@ -232,9 +240,8 @@ config USB_NET_RNDIS_WLAN
 
 	  If you choose to build a module, it'll be called rndis_wlan.
 
-source "drivers/net/wireless/rtl818x/Kconfig"
-
 config ADM8211
+	depends on n
 	tristate "ADMtek ADM8211 support"
 	depends on m
 	depends on MAC80211 && PCI
@@ -262,6 +269,8 @@ config ADM8211
 
 	  Thanks to Infineon-ADMtek for their support of this driver.
 
+source "drivers/net/wireless/realtek/rtl818x/Kconfig"
+
 config MAC80211_HWSIM
 	tristate "Simulated radio testing tool for mac80211"
 	depends on m
@@ -277,6 +286,7 @@ config MAC80211_HWSIM
 	  called mac80211_hwsim.  If unsure, say N.
 
 config MWL8K
+	depends on n
 	tristate "Marvell 88W8xxx PCI/PCIe Wireless support"
 	depends on m
 	depends on MAC80211 && PCI
@@ -287,22 +297,24 @@ config MWL8K
 	  will be called mwl8k.  If unsure, say N.
 
 source "drivers/net/wireless/ath/Kconfig"
-source "drivers/net/wireless/b43/Kconfig"
-source "drivers/net/wireless/b43legacy/Kconfig"
-source "drivers/net/wireless/brcm80211/Kconfig"
+#source "drivers/net/wireless/b43/Kconfig"
+#source "drivers/net/wireless/b43legacy/Kconfig"
+#source "drivers/net/wireless/brcm80211/Kconfig"
 #source "drivers/net/wireless/hostap/Kconfig"
-source "drivers/net/wireless/ipw2x00/Kconfig"
-source "drivers/net/wireless/iwlwifi/Kconfig"
-source "drivers/net/wireless/iwlegacy/Kconfig"
-source "drivers/net/wireless/libertas/Kconfig"
-source "drivers/net/wireless/orinoco/Kconfig"
-source "drivers/net/wireless/p54/Kconfig"
-source "drivers/net/wireless/rt2x00/Kconfig"
-source "drivers/net/wireless/rtlwifi/Kconfig"
+#source "drivers/net/wireless/ipw2x00/Kconfig"
+#source "drivers/net/wireless/iwlwifi/Kconfig"
+#source "drivers/net/wireless/iwlegacy/Kconfig"
+#source "drivers/net/wireless/libertas/Kconfig"
+#source "drivers/net/wireless/orinoco/Kconfig"
+#source "drivers/net/wireless/p54/Kconfig"
+#source "drivers/net/wireless/rt2x00/Kconfig"
+source "drivers/net/wireless/mediatek/Kconfig"
+source "drivers/net/wireless/realtek/rtlwifi/Kconfig"
+source "drivers/net/wireless/realtek/rtl8xxxu/Kconfig"
 source "drivers/net/wireless/ti/Kconfig"
-source "drivers/net/wireless/zd1211rw/Kconfig"
-source "drivers/net/wireless/mwifiex/Kconfig"
-source "drivers/net/wireless/cw1200/Kconfig"
+#source "drivers/net/wireless/zd1211rw/Kconfig"
+#source "drivers/net/wireless/mwifiex/Kconfig"
+#source "drivers/net/wireless/cw1200/Kconfig"
 source "drivers/net/wireless/rsi/Kconfig"
 
 endif # WLAN

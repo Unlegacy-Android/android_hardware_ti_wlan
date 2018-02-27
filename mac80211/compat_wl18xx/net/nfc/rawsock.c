@@ -211,12 +211,7 @@ static void rawsock_tx_work(struct work_struct *work)
 	}
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int rawsock_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
-#else
-static int rawsock_sendmsg(struct kiocb *iocb, struct socket *sock,
-			   struct msghdr *msg, size_t len)
-#endif
 {
 	struct sock *sk = sock->sk;
 	struct nfc_dev *dev = nfc_rawsock(sk)->dev;
@@ -251,14 +246,15 @@ static int rawsock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	return len;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_rawsock_sendmsg(struct kiocb *iocb, struct socket *sock,
+				    struct msghdr *msg, size_t len){
+	return rawsock_sendmsg(sock, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int rawsock_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 			   int flags)
-#else
-static int rawsock_recvmsg(struct kiocb *iocb, struct socket *sock,
-			   struct msghdr *msg, size_t len, int flags)
-#endif
 {
 	int noblock = flags & MSG_DONTWAIT;
 	struct sock *sk = sock->sk;
@@ -284,6 +280,12 @@ static int rawsock_recvmsg(struct kiocb *iocb, struct socket *sock,
 
 	return rc ? : copied;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_rawsock_recvmsg(struct kiocb *iocb, struct socket *sock,
+				    struct msghdr *msg, size_t len, int flags){
+	return rawsock_recvmsg(sock, msg, len, flags);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 static const struct proto_ops rawsock_ops = {
 	.family         = PF_NFC,
@@ -300,8 +302,16 @@ static const struct proto_ops rawsock_ops = {
 	.shutdown       = sock_no_shutdown,
 	.setsockopt     = sock_no_setsockopt,
 	.getsockopt     = sock_no_getsockopt,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg        = rawsock_sendmsg,
+#else
+	.sendmsg = backport_rawsock_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg        = rawsock_recvmsg,
+#else
+	.recvmsg = backport_rawsock_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.mmap           = sock_no_mmap,
 };
 
@@ -321,7 +331,11 @@ static const struct proto_ops rawsock_raw_ops = {
 	.setsockopt     = sock_no_setsockopt,
 	.getsockopt     = sock_no_getsockopt,
 	.sendmsg        = sock_no_sendmsg,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg        = rawsock_recvmsg,
+#else
+	.recvmsg = backport_rawsock_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.mmap           = sock_no_mmap,
 };
 
@@ -331,7 +345,8 @@ static void rawsock_destruct(struct sock *sk)
 
 	if (sk->sk_state == TCP_ESTABLISHED) {
 		nfc_deactivate_target(nfc_rawsock(sk)->dev,
-				      nfc_rawsock(sk)->target_idx);
+				      nfc_rawsock(sk)->target_idx,
+				      NFC_TARGET_MODE_IDLE);
 		nfc_put_device(nfc_rawsock(sk)->dev);
 	}
 
@@ -344,7 +359,7 @@ static void rawsock_destruct(struct sock *sk)
 }
 
 static int rawsock_create(struct net *net, struct socket *sock,
-			  const struct nfc_protocol *nfc_proto)
+			  const struct nfc_protocol *nfc_proto, int kern)
 {
 	struct sock *sk;
 
@@ -358,7 +373,7 @@ static int rawsock_create(struct net *net, struct socket *sock,
 	else
 		sock->ops = &rawsock_ops;
 
-	sk = sk_alloc(net, PF_NFC, GFP_ATOMIC, nfc_proto->proto);
+	sk = sk_alloc(net, PF_NFC, GFP_ATOMIC, nfc_proto->proto, kern);
 	if (!sk)
 		return -ENOMEM;
 

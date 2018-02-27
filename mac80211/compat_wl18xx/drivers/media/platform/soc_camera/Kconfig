@@ -16,6 +16,7 @@ config SOC_CAMERA_SCALE_CROP
 	depends on m
 
 config SOC_CAMERA_PLATFORM
+	depends on !KERNEL_3_9
 	tristate "platform camera support"
 	depends on m
 	depends on SOC_CAMERA

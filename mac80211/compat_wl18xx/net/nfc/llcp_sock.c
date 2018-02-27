@@ -572,7 +572,7 @@ static unsigned int llcp_sock_poll(struct file *file, struct socket *sock,
 	if (sock_writeable(sk) && sk->sk_state == LLCP_CONNECTED)
 		mask |= POLLOUT | POLLWRNORM | POLLWRBAND;
 	else
-		set_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags);
+		sk_set_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	pr_debug("mask 0x%x\n", mask);
 
@@ -750,13 +750,8 @@ error:
 	return ret;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int llcp_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 			     size_t len)
-#else
-static int llcp_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
-			     struct msghdr *msg, size_t len)
-#endif
 {
 	struct sock *sk = sock->sk;
 	struct nfc_llcp_sock *llcp_sock = nfc_llcp_sock(sk);
@@ -797,14 +792,15 @@ static int llcp_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	return nfc_llcp_send_i_frame(llcp_sock, msg, len);
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_llcp_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
+				      struct msghdr *msg, size_t len){
+	return llcp_sock_sendmsg(sock, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int llcp_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 			     size_t len, int flags)
-#else
-static int llcp_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
-			     struct msghdr *msg, size_t len, int flags)
-#endif
 {
 	int noblock = flags & MSG_DONTWAIT;
 	struct sock *sk = sock->sk;
@@ -892,6 +888,13 @@ done:
 
 	return copied;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_llcp_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
+				      struct msghdr *msg, size_t len,
+				      int flags){
+	return llcp_sock_recvmsg(sock, msg, len, flags);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 static const struct proto_ops llcp_sock_ops = {
 	.family         = PF_NFC,
@@ -908,8 +911,16 @@ static const struct proto_ops llcp_sock_ops = {
 	.shutdown       = sock_no_shutdown,
 	.setsockopt     = nfc_llcp_setsockopt,
 	.getsockopt     = nfc_llcp_getsockopt,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg        = llcp_sock_sendmsg,
+#else
+	.sendmsg = backport_llcp_sock_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg        = llcp_sock_recvmsg,
+#else
+	.recvmsg = backport_llcp_sock_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.mmap           = sock_no_mmap,
 };
 
@@ -929,7 +940,11 @@ static const struct proto_ops llcp_rawsock_ops = {
 	.setsockopt     = sock_no_setsockopt,
 	.getsockopt     = sock_no_getsockopt,
 	.sendmsg        = sock_no_sendmsg,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg        = llcp_sock_recvmsg,
+#else
+	.recvmsg = backport_llcp_sock_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.mmap           = sock_no_mmap,
 };
 
@@ -952,12 +967,12 @@ static void llcp_sock_destruct(struct sock *sk)
 	}
 }
 
-struct sock *nfc_llcp_sock_alloc(struct socket *sock, int type, gfp_t gfp)
+struct sock *nfc_llcp_sock_alloc(struct socket *sock, int type, gfp_t gfp, int kern)
 {
 	struct sock *sk;
 	struct nfc_llcp_sock *llcp_sock;
 
-	sk = sk_alloc(&init_net, PF_NFC, gfp, &llcp_sock_proto);
+	sk = sk_alloc(&init_net, PF_NFC, gfp, &llcp_sock_proto, kern);
 	if (!sk)
 		return NULL;
 
@@ -1003,7 +1018,7 @@ void nfc_llcp_sock_free(struct nfc_llcp_sock *sock)
 }
 
 static int llcp_sock_create(struct net *net, struct socket *sock,
-			    const struct nfc_protocol *nfc_proto)
+			    const struct nfc_protocol *nfc_proto, int kern)
 {
 	struct sock *sk;
 
@@ -1019,7 +1034,7 @@ static int llcp_sock_create(struct net *net, struct socket *sock,
 	else
 		sock->ops = &llcp_sock_ops;
 
-	sk = nfc_llcp_sock_alloc(sock, sock->type, GFP_ATOMIC);
+	sk = nfc_llcp_sock_alloc(sock, sock->type, GFP_ATOMIC, kern);
 	if (sk == NULL)
 		return -ENOMEM;
 

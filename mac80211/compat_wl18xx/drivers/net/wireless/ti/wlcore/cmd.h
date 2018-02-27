@@ -79,7 +79,7 @@ int wl1271_cmd_set_sta_key(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 int wl1271_cmd_set_ap_key(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			  u16 action, u8 id, u8 key_type,
 			  u8 key_size, const u8 *key, u8 hlid, u32 tx_seq_32,
-			  u16 tx_seq_16);
+			  u16 tx_seq_16, bool is_pairwise);
 int wl12xx_cmd_set_peer_state(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			      u8 hlid);
 int wl12xx_roc(struct wl1271 *wl, struct wl12xx_vif *wlvif, u8 role_id,
@@ -626,7 +626,6 @@ struct wl12xx_cmd_remove_peer {
  */
 enum wl12xx_fwlogger_log_mode {
 	WL12XX_FWLOG_CONTINUOUS,
-	WL12XX_FWLOG_ON_DEMAND
 };
 
 /* Include/exclude timestamps from the log messages */
@@ -655,7 +654,6 @@ struct wl12xx_cmd_regdomain_dfs_config {
 } __packed;
 
 enum wlcore_generic_cfg_feature {
-	WLCORE_CFG_FEATURE_DIVERSITY_MODE = 1,
 	WLCORE_CFG_FEATURE_RADAR_DEBUG = 2,
 };
 

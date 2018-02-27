@@ -64,10 +64,8 @@ ieee802154_get_dev(struct net *net, const struct ieee802154_addr *addr)
 			if (tmp->type != ARPHRD_IEEE802154)
 				continue;
 
-			pan_id = ieee802154_mlme_ops(tmp)->get_pan_id(tmp);
-			short_addr =
-				ieee802154_mlme_ops(tmp)->get_short_addr(tmp);
-
+			pan_id = tmp->ieee802154_ptr->pan_id;
+			short_addr = tmp->ieee802154_ptr->short_addr;
 			if (pan_id == addr->pan_id &&
 			    short_addr == addr->short_addr) {
 				dev = tmp;
@@ -98,22 +96,24 @@ static int ieee802154_sock_release(struct socket *sock)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int ieee802154_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 				   size_t len)
-#else
-static int ieee802154_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
-				   struct msghdr *msg, size_t len)
-#endif
 {
 	struct sock *sk = sock->sk;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	return sk->sk_prot->sendmsg(sk, msg, len);
 #else
-	return sk->sk_prot->sendmsg(iocb, sk, msg, len);
-#endif
+	return sk->sk_prot->sendmsg(NULL, sk, msg, len);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_ieee802154_sock_sendmsg(struct kiocb *iocb,
+					    struct socket *sock,
+					    struct msghdr *msg, size_t len){
+	return ieee802154_sock_sendmsg(sock, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 static int ieee802154_sock_bind(struct socket *sock, struct sockaddr *uaddr,
 				int addr_len)
@@ -237,15 +237,9 @@ static int raw_bind(struct sock *sk, struct sockaddr *_uaddr, int len)
 		goto out;
 	}
 
-	if (dev->type != ARPHRD_IEEE802154) {
-		err = -ENODEV;
-		goto out_put;
-	}
-
 	sk->sk_bound_dev_if = dev->ifindex;
 	sk_dst_reset(sk);
 
-out_put:
 	dev_put(dev);
 out:
 	release_sock(sk);
@@ -264,12 +258,7 @@ static int raw_disconnect(struct sock *sk, int flags)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int raw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
-#else
-static int raw_sendmsg(struct kiocb *iocb, struct sock *sk,
-		       struct msghdr *msg, size_t size)
-#endif
 {
 	struct net_device *dev;
 	unsigned int mtu;
@@ -295,12 +284,12 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk,
 		goto out;
 	}
 
-	mtu = dev->mtu;
+	mtu = IEEE802154_MTU;
 	pr_debug("name = %s, mtu = %u\n", dev->name, mtu);
 
 	if (size > mtu) {
 		pr_debug("size = %Zu, mtu = %u\n", size, mtu);
-		err = -EINVAL;
+		err = -EMSGSIZE;
 		goto out_dev;
 	}
 
@@ -339,14 +328,15 @@ out_dev:
 out:
 	return err;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_raw_sendmsg(struct kiocb *iocb, struct sock *sk,
+				struct msghdr *msg, size_t len){
+	return raw_sendmsg(sk, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int raw_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		       int noblock, int flags, int *addr_len)
-#else
-static int raw_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
-		       size_t len, int noblock, int flags, int *addr_len)
-#endif
 {
 	size_t copied = 0;
 	int err = -EOPNOTSUPP;
@@ -377,6 +367,13 @@ out:
 		return err;
 	return copied;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_raw_recvmsg(struct kiocb *iocb, struct sock *sk,
+				struct msghdr *msg, size_t len, int noblock,
+				int flags, int *addr_len){
+	return raw_recvmsg(sk, msg, len, noblock, flags, addr_len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 static int raw_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
@@ -430,8 +427,16 @@ static struct proto ieee802154_raw_prot = {
 	.obj_size	= sizeof(struct sock),
 	.close		= raw_close,
 	.bind		= raw_bind,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg	= raw_sendmsg,
+#else
+	.sendmsg = backport_raw_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg	= raw_recvmsg,
+#else
+	.recvmsg = backport_raw_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.hash		= raw_hash,
 	.unhash		= raw_unhash,
 	.connect	= raw_connect,
@@ -455,7 +460,11 @@ static const struct proto_ops ieee802154_raw_ops = {
 	.shutdown	   = sock_no_shutdown,
 	.setsockopt	   = sock_common_setsockopt,
 	.getsockopt	   = sock_common_getsockopt,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg	   = ieee802154_sock_sendmsg,
+#else
+	.sendmsg = backport_ieee802154_sock_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.recvmsg	   = sock_common_recvmsg,
 	.mmap		   = sock_no_mmap,
 	.sendpage	   = sock_no_sendpage,
@@ -633,12 +642,7 @@ static int dgram_disconnect(struct sock *sk, int flags)
 	return 0;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int dgram_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
-#else
-static int dgram_sendmsg(struct kiocb *iocb, struct sock *sk,
-			 struct msghdr *msg, size_t size)
-#endif
 {
 	struct net_device *dev;
 	unsigned int mtu;
@@ -669,7 +673,7 @@ static int dgram_sendmsg(struct kiocb *iocb, struct sock *sk,
 		err = -ENXIO;
 		goto out;
 	}
-	mtu = dev->mtu;
+	mtu = IEEE802154_MTU;
 	pr_debug("name = %s, mtu = %u\n", dev->name, mtu);
 
 	if (size > mtu) {
@@ -708,8 +712,8 @@ static int dgram_sendmsg(struct kiocb *iocb, struct sock *sk,
 	cb->seclevel = ro->seclevel;
 	cb->seclevel_override = ro->seclevel_override;
 
-	err = dev_hard_header(skb, dev, ETH_P_IEEE802154, &dst_addr,
-			      ro->bound ? &ro->src_addr : NULL, size);
+	err = wpan_dev_hard_header(skb, dev, &dst_addr,
+				   ro->bound ? &ro->src_addr : NULL, size);
 	if (err < 0)
 		goto out_skb;
 
@@ -736,15 +740,15 @@ out_dev:
 out:
 	return err;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_dgram_sendmsg(struct kiocb *iocb, struct sock *sk,
+				  struct msghdr *msg, size_t len){
+	return dgram_sendmsg(sk, msg, len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 static int dgram_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 			 int noblock, int flags, int *addr_len)
-#else
-static int dgram_recvmsg(struct kiocb *iocb, struct sock *sk,
-			 struct msghdr *msg, size_t len, int noblock,
-			 int flags, int *addr_len)
-#endif
 {
 	size_t copied = 0;
 	int err = -EOPNOTSUPP;
@@ -769,6 +773,12 @@ static int dgram_recvmsg(struct kiocb *iocb, struct sock *sk,
 	sock_recv_ts_and_drops(msg, sk, skb);
 
 	if (saddr) {
+		/* Clear the implicit padding in struct sockaddr_ieee802154
+		 * (16 bits between 'family' and 'addr') and in struct
+		 * ieee802154_addr_sa (16 bits at the end of the structure).
+		 */
+		memset(saddr, 0, sizeof(*saddr));
+
 		saddr->family = AF_IEEE802154;
 		ieee802154_addr_to_sa(&saddr->addr, &mac_cb(skb)->source);
 		*addr_len = sizeof(*saddr);
@@ -783,6 +793,13 @@ out:
 		return err;
 	return copied;
 }
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0)
+static int backport_dgram_recvmsg(struct kiocb *iocb, struct sock *sk,
+				  struct msghdr *msg, size_t len, int noblock,
+				  int flags, int *addr_len){
+	return dgram_recvmsg(sk, msg, len, noblock, flags, addr_len);
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) */
 
 static int dgram_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
@@ -827,9 +844,9 @@ static int ieee802154_dgram_deliver(struct net_device *dev, struct sk_buff *skb)
 	/* Data frame processing */
 	BUG_ON(dev->type != ARPHRD_IEEE802154);
 
-	pan_id = ieee802154_mlme_ops(dev)->get_pan_id(dev);
-	short_addr = ieee802154_mlme_ops(dev)->get_short_addr(dev);
-	hw_addr = ieee802154_devaddr_from_raw(dev->dev_addr);
+	pan_id = dev->ieee802154_ptr->pan_id;
+	short_addr = dev->ieee802154_ptr->short_addr;
+	hw_addr = dev->ieee802154_ptr->extended_addr;
 
 	read_lock(&dgram_lock);
 	sk_for_each(sk, &dgram_head) {
@@ -979,8 +996,16 @@ static struct proto ieee802154_dgram_prot = {
 	.init		= dgram_init,
 	.close		= dgram_close,
 	.bind		= dgram_bind,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg	= dgram_sendmsg,
+#else
+	.sendmsg = backport_dgram_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.recvmsg	= dgram_recvmsg,
+#else
+	.recvmsg = backport_dgram_recvmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.hash		= dgram_hash,
 	.unhash		= dgram_unhash,
 	.connect	= dgram_connect,
@@ -1005,7 +1030,11 @@ static const struct proto_ops ieee802154_dgram_ops = {
 	.shutdown	   = sock_no_shutdown,
 	.setsockopt	   = sock_common_setsockopt,
 	.getsockopt	   = sock_common_getsockopt,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
 	.sendmsg	   = ieee802154_sock_sendmsg,
+#else
+	.sendmsg = backport_ieee802154_sock_sendmsg,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0) */
 	.recvmsg	   = sock_common_recvmsg,
 	.mmap		   = sock_no_mmap,
 	.sendpage	   = sock_no_sendpage,
@@ -1044,7 +1073,7 @@ static int ieee802154_create(struct net *net, struct socket *sock,
 	}
 
 	rc = -ENOMEM;
-	sk = sk_alloc(net, PF_IEEE802154, GFP_KERNEL, proto);
+	sk = sk_alloc(net, PF_IEEE802154, GFP_KERNEL, proto, kern);
 	if (!sk)
 		goto out;
 	rc = 0;
